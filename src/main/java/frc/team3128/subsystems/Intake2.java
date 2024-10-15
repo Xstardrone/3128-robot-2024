@@ -7,6 +7,7 @@ import common.core.subsystems.PivotTemplate;
 import common.hardware.motorcontroller.NAR_CANSpark;
 import common.hardware.motorcontroller.NAR_CANSpark.SparkMaxConfig;
 import common.hardware.motorcontroller.NAR_Motor.Neutral;
+import common.utility.narwhaldashboard.NarwhalDashboard.State;
 import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.trajectory.ExponentialProfile.Constraints;
 import edu.wpi.first.wpilibj2.command.Command;
@@ -17,9 +18,7 @@ import frc.team3128.subsystems.Intake.IntakePivot;
 import frc.team3128.subsystems.Intake.IntakeRollers;
 import edu.wpi.first.wpilibj.DigitalInput;
 
-import static edu.wpi.first.wpilibj2.command.Commands.sequence;
-import static edu.wpi.first.wpilibj2.command.Commands.waitSeconds;
-import static edu.wpi.first.wpilibj2.command.Commands.waitUntil;
+import static edu.wpi.first.wpilibj2.command.Commands.*;
 import static frc.team3128.Constants.IntakeConstants.*;
 
 import java.util.function.DoubleSupplier;
@@ -58,11 +57,11 @@ public class Intake2 {
 
         public Command hardReset(double power) {
             return sequence(
-                waitUntil(()-> intakePivot.atSetpoint()).withTimeout(1.5),
-                intakePivot.runPivot(power),
+                waitUntil(()-> intake2pivot.atSetpoint()).withTimeout(1.5),
+                intake2pivot.runPivot(power),
                 waitSeconds(0.1),
-                intakePivot.runPivot(0),
-                intakePivot.reset(0)
+                intake2pivot.runPivot(0),
+                intake2pivot.reset(0)
             );
         }
 
@@ -153,5 +152,66 @@ public class Intake2 {
     private Intake2() {
         intake2pivot = new Intake2Pivot();
         intake2Rollers = new Intake2Rollers();
+    }
+
+    public Command retract(boolean serialize) {
+        return sequence(
+            waitUntil(() -> Climber.getInstance().isNeutral()),
+            runOnce(() -> isRetracting = true),
+            intake2pivot.pivotTo(5),
+            intake2pivot.hardReset(-0.2),
+            runOnce(() -> isRetracting = false),
+            either(intake2Rollers.serialize().withTimeout(1).andThen(intake2Rollers.runManipulator(0)), intake2Rollers.runManipulator(0), () -> serialize)
+        );
+    }
+
+    public Command intake(Setpoints setpoint) {
+        return sequence(
+            deadline(
+                intake2Rollers.intake(),
+                sequence(
+                    intake2pivot.pivotTo(setpoint.angle)
+                )
+            ),
+            retract(true)
+        );
+    }
+
+    public Command outtake() {
+        return sequence(
+            intake2pivot.pivotTo(Setpoints.extended.angle),
+            waitUntil(() -> intake2pivot.getMeasurement() > 45).withTimeout(2),
+            intake2Rollers.runManipulator(-1),
+            waitSeconds(0.5),
+            retract(false)
+        );
+    }
+
+    public Command intakeAuto() {
+        return sequence(
+            deadline(
+                intake2Rollers.intake(),
+                sequence(
+                    intake2pivot.pivotTo(Setpoints.extended.angle)
+                )
+            ),
+            retractAuto()
+        );
+    }
+
+    public Command retractAuto() {
+        return sequence(
+            intake2Rollers.runManipulator(STALL_POWER),
+            intake2pivot.pivotTo(() -> Climber.getInstance().getAngle()),
+            waitUntil(() -> intake2pivot.atSetpoint()).withTimeout(1),
+            intake2pivot.runPivot(0)
+        );
+    }
+
+    public State getRunningState() {
+        if (PIVOT_MOTOR.getState() == State.DISCONNECTED) return State.DISCONNECTED;
+        if (LEFT_ROLLER_MOTOR.getState() == State.DISCONNECTED && RIGHT_ROLLER_MOTOR.getState() == State.DISCONNECTED) return State.DISCONNECTED;
+        if (LEFT_ROLLER_MOTOR.getState() == State.DISCONNECTED || RIGHT_ROLLER_MOTOR.getState() == State.DISCONNECTED) return State.PARTIALLY_RUNNING;
+        return State.RUNNING;
     }
 }
